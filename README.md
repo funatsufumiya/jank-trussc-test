@@ -11,3 +11,7 @@ Tested on Win/Mac/Linux (windows ver is checked using [jank-win](https://github.
 ```bash
 $ lein run
 ```
+
+## Dev
+
+[TrussC-dll](https://github.com/funatsufumiya/TrussC-dll) is used instead of TrussC original code. Headers are modified for them, mainly for C dylib integration.
