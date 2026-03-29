@@ -4,7 +4,7 @@
 
 ![docs/screenshot.png](docs/screenshot.png)
 
-Tested on Win/Mac/Linux (windows ver is checked using [jank-win](https://github.com/ikappaki/jank-win), mac/linux is used brew/apt, see [#installation](https://book.jank-lang.org/getting-started/01-installation.html))
+Tested on Win/Mac (windows ver is checked using [jank-win](https://github.com/ikappaki/jank-win), mac ver is used brew, see [#installation](https://book.jank-lang.org/getting-started/01-installation.html))
 
 ## Run
 
