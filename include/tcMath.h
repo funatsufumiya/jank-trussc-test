@@ -1011,9 +1011,14 @@ inline float angleDifferenceDeg(float deg1, float deg2) {
 // =============================================================================
 
 namespace internal {
-    // Thread-local random number generator
+    // // Thread-local random number generator
+    // inline std::mt19937& getRandomEngine() {
+    //     static thread_local std::mt19937 engine(std::random_device{}());
+    //     return engine;
+    // }
+    
     inline std::mt19937& getRandomEngine() {
-        static thread_local std::mt19937 engine(std::random_device{}());
+        static std::mt19937 engine(std::random_device{}());
         return engine;
     }
 }
