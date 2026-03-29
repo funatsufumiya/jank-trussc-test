@@ -10,10 +10,37 @@
 #include <TrussC.h>
           
 #include \"tc/platform/c_exports.h\"
-
           
 using namespace std;
 using namespace tc;
+          
+jank::runtime::oref<jank::runtime::object> init_callback;
+jank::runtime::oref<jank::runtime::object> update_callback;
+jank::runtime::oref<jank::runtime::object> draw_callback;
+          
+void set_init_callback(jank::runtime::oref<jank::runtime::object> obj){
+    init_callback = obj;
+}
+
+void set_update_callback(jank::runtime::oref<jank::runtime::object> obj){
+    update_callback = obj;
+}
+
+void set_draw_callback(jank::runtime::oref<jank::runtime::object> obj){
+    draw_callback = obj;
+}
+
+void call_init_callback(){
+  dynamic_call(init_callback);
+}
+          
+void call_update_callback(){
+  dynamic_call(update_callback);
+}
+
+void call_draw_callback(){
+  dynamic_call(draw_callback);
+}
 
 class tcApp : public App {
 public:
@@ -36,10 +63,12 @@ public:
 };
 
 void tcApp::setup() {
-
+    call_init_callback();
 }
 
 void tcApp::update() {
+    call_update_callback();
+
     float r = getFrameRate();
     std::ostringstream oss;
     oss << \"FPS: \" << std::fixed << std::setprecision(2) << r;
@@ -48,6 +77,8 @@ void tcApp::update() {
 }
 
 void tcApp::draw() {
+    call_draw_callback();
+
     trussc_clear(0.12f, 0, 0, 1);
 
     // Rotating box
@@ -79,5 +110,26 @@ void run() {
 
 ")
 
+(def is_first_draw (atom true))
+(def is_first_update (atom true))
+
+(defn init []
+  (println "init from jank!"))
+
+(defn update []
+  (if @is_first_update
+    (do
+      (println "first update from jank!")
+      (reset! is_first_update false))))
+
+(defn draw []
+  (if @is_first_draw
+    (do
+      (println "first draw from jank!")
+      (reset! is_first_draw false))))
+
 (defn -main [& args]
+  (cpp/set_init_callback init)
+  (cpp/set_update_callback update)
+  (cpp/set_draw_callback draw)
   (cpp/run))
