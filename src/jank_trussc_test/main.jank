@@ -7,6 +7,9 @@
 
 #include <TrussC.h>
           
+#include \"tc/platform/c_exports.h\"
+
+          
 using namespace std;
 using namespace tc;
 
@@ -39,7 +42,7 @@ void tcApp::update() {
 }
 
 void tcApp::draw() {
-    clear(0.12f);
+    trussc_clear(0.12f, 0, 0, 1);
 
     // Rotating box
     noFill();
