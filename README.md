@@ -1,6 +1,6 @@
 # jank TrussC test
 
-[jank](https://jank-lang.org/) and [TrussC](https://github.com/TrussC-org/TrussC) integration test
+[jank](https://jank-lang.org/) and [TrussC](https://github.com/TrussC-org/TrussC) ([website](https://trussc.org/index.html)) integration test
 
 ![docs/screenshot.png](docs/screenshot.png)
 
