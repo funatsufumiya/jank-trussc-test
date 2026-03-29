@@ -4,6 +4,8 @@
 
 #include <cstdio>
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 
 #include <TrussC.h>
           
@@ -38,7 +40,11 @@ void tcApp::setup() {
 }
 
 void tcApp::update() {
-
+    float r = getFrameRate();
+    std::ostringstream oss;
+    oss << \"FPS: \" << std::fixed << std::setprecision(2) << r;
+    std::string s = oss.str();
+    setWindowTitle(s);
 }
 
 void tcApp::draw() {
