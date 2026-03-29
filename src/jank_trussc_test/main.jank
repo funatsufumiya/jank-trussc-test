@@ -66,14 +66,18 @@ void tcApp::setup() {
     call_init_callback();
 }
 
+std::string fps2string(float fps){
+    std::ostringstream oss;
+    oss << \"FPS: \" << std::fixed << std::setprecision(2) << fps;
+    std::string s = oss.str();
+    return s;
+}
+
 void tcApp::update() {
     call_update_callback();
 
-    float r = getFrameRate();
-    std::ostringstream oss;
-    oss << \"FPS: \" << std::fixed << std::setprecision(2) << r;
-    std::string s = oss.str();
-    setWindowTitle(s);
+    // float r = getFrameRate();
+    // setWindowTitle(fps2string(r));
 }
 
 void tcApp::draw() {
@@ -120,7 +124,9 @@ void run() {
   (if @is_first_update
     (do
       (println "first update from jank!")
-      (reset! is_first_update false))))
+      (reset! is_first_update false)))
+  (let [fps (cpp/tc.getFrameRate)]
+    (cpp/tc.setWindowTitle (cpp/fps2string fps))))
 
 (defn draw []
   (if @is_first_draw
