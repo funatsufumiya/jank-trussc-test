@@ -2,6 +2,11 @@
 
 (cpp/raw "
 
+#include \"safe_snprintf.h\" // WORKAROUND
+#define snprintf _safe_snprintf
+
+#include \"safe_snprintf.cpp\" // WORKAROUND
+
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -9,7 +14,8 @@
 
 #include <TrussC.h>
           
-#include \"tc/platform/c_exports.h\"
+#include \"tcGlobal.cpp\" // WORKAROUND
+#include \"tcPlatform.cpp\" // WORKAROUND
           
 using namespace std;
 using namespace tc;

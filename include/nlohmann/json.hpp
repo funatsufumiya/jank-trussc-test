@@ -28,9 +28,6 @@
 #include <iterator> // random_access_iterator_tag
 #include <memory> // unique_ptr
 #include <string> // string, stoi, to_string
-#include <sstream> // ostringstream (workaround for snprintf-free formatting)
-#include <iomanip> // setprecision
-#include <cstdint> // uint16_t, etc
 #include <utility> // declval, forward, move, pair, swap
 #include <vector> // vector
 
@@ -5999,36 +5996,6 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/value_t.hpp>
 
 
-// write \uXXXX without using snprintf (avoid external symbol)
-static inline void nlohmann_json_write_u4(char* dest, std::uint16_t v) {
-    static const char* hex = "0123456789abcdef";
-    dest[0] = '\\'; dest[1] = 'u';
-    dest[2] = hex[(v >> 12) & 0xF];
-    dest[3] = hex[(v >> 8) & 0xF];
-    dest[4] = hex[(v >> 4) & 0xF];
-    dest[5] = hex[v & 0xF];
-}
-
-// write an uppercase "<U+XXXX>" sequence (used for token escaping)
-static inline void nlohmann_json_write_Uplus4(char* dest, std::uint16_t v) {
-    static const char* HEX = "0123456789ABCDEF";
-    dest[0] = '<'; dest[1] = 'U'; dest[2] = '+';
-    dest[3] = HEX[(v >> 12) & 0xF];
-    dest[4] = HEX[(v >> 8) & 0xF];
-    dest[5] = HEX[(v >> 4) & 0xF];
-    dest[6] = HEX[v & 0xF];
-    dest[7] = '>';
-    dest[8] = '\0';
-}
-
-// write two uppercase hex digits (no terminator)
-static inline void nlohmann_json_write_hex2_upper(char* dest, unsigned char c) {
-    static const char* HEX = "0123456789ABCDEF";
-    dest[0] = HEX[(c >> 4) & 0xF];
-    dest[1] = HEX[c & 0xF];
-}
-
-
 NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
@@ -8856,13 +8823,13 @@ scan_number_done:
         std::string result;
         for (const auto c : token_string)
         {
-                if (static_cast<unsigned char>(c) <= '\x1F')
-                {
-                    // escape control characters without snprintf
-                    std::array<char, 9> cs{{}};
-                    nlohmann_json_write_Uplus4(cs.data(), static_cast<unsigned char>(c));
-                    result += cs.data();
-                }
+            if (static_cast<unsigned char>(c) <= '\x1F')
+            {
+                // escape control characters
+                std::array<char, 9> cs{{}};
+                static_cast<void>((snprintf)(cs.data(), cs.size(), "<U+%.4X>", static_cast<unsigned char>(c))); // NOLINT(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+                result += cs.data();
+            }
             else
             {
                 // add character as is
@@ -9506,8 +9473,7 @@ class binary_reader
             default: // anything else not supported (yet)
             {
                 std::array<char, 3> cr{{}};
-                nlohmann_json_write_hex2_upper(cr.data(), static_cast<unsigned char>(element_type));
-                cr[2] = '\0';
+                static_cast<void>((snprintf)(cr.data(), cr.size(), "%.2hhX", static_cast<unsigned char>(element_type))); // NOLINT(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
                 const std::string cr_str{cr.data()};
                 return sax->parse_error(element_type_parse_position, cr_str,
                                         parse_error::create(114, element_type_parse_position, concat("Unsupported BSON record type 0x", cr_str), nullptr));
@@ -12079,8 +12045,7 @@ class binary_reader
     std::string get_token_string() const
     {
         std::array<char, 3> cr{{}};
-        nlohmann_json_write_hex2_upper(cr.data(), static_cast<unsigned char>(current));
-        cr[2] = '\0';
+        static_cast<void>((snprintf)(cr.data(), cr.size(), "%.2hhX", static_cast<unsigned char>(current))); // NOLINT(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
         return std::string{cr.data()};
     }
 
@@ -18508,16 +18473,17 @@ class serializer
                             {
                                 if (codepoint <= 0xFFFF)
                                 {
-                                    nlohmann_json_write_u4(string_buffer.data() + bytes, static_cast<std::uint16_t>(codepoint));
+                                    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+                                    static_cast<void>((snprintf)(string_buffer.data() + bytes, 7, "\\u%04x",
+                                                                      static_cast<std::uint16_t>(codepoint)));
                                     bytes += 6;
                                 }
                                 else
                                 {
-                                    // write surrogate pair \uXXXX\uXXXX without using snprintf
-                                    nlohmann_json_write_u4(string_buffer.data() + bytes,
-                                                           static_cast<std::uint16_t>(0xD7C0u + (codepoint >> 10u)));
-                                    nlohmann_json_write_u4(string_buffer.data() + bytes + 6,
-                                                           static_cast<std::uint16_t>(0xDC00u + (codepoint & 0x3FFu)));
+                                    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+                                    static_cast<void>((snprintf)(string_buffer.data() + bytes, 13, "\\u%04x\\u%04x",
+                                                                      static_cast<std::uint16_t>(0xD7C0u + (codepoint >> 10u)),
+                                                                      static_cast<std::uint16_t>(0xDC00u + (codepoint & 0x3FFu))));
                                     bytes += 12;
                                 }
                             }
@@ -18872,20 +18838,19 @@ class serializer
         // get number of digits for a float -> text -> float round-trip
         static constexpr auto d = std::numeric_limits<number_float_t>::max_digits10;
 
-        // the actual conversion without snprintf: use ostringstream as fallback
-        std::ostringstream oss;
-        oss.imbue(std::locale::classic());
-        oss << std::setprecision(d) << x;
-        const std::string s = oss.str();
-        JSON_ASSERT(!s.empty());
-        JSON_ASSERT(s.size() < number_buffer.size());
-        // copy into number_buffer and null-terminate remainder
-        std::copy(s.begin(), s.end(), number_buffer.begin());
-        auto len = static_cast<std::ptrdiff_t>(s.size());
+        // the actual conversion
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+        std::ptrdiff_t len = (snprintf)(number_buffer.data(), number_buffer.size(), "%.*g", d, x);
+
+        // negative value indicates an error
+        JSON_ASSERT(len > 0);
+        // check if buffer was large enough
+        JSON_ASSERT(static_cast<std::size_t>(len) < number_buffer.size());
 
         // erase thousands separator
         if (thousands_sep != '\0')
         {
+            // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::remove returns an iterator, see https://github.com/nlohmann/json/issues/3081
             const auto end = std::remove(number_buffer.begin(), number_buffer.begin() + len, thousands_sep);
             std::fill(end, number_buffer.end(), '\0');
             JSON_ASSERT((end - number_buffer.begin()) <= len);
@@ -18895,6 +18860,7 @@ class serializer
         // convert decimal point to '.'
         if (decimal_point != '\0' && decimal_point != '.')
         {
+            // NOLINTNEXTLINE(readability-qualified-auto,llvm-qualified-auto): std::find returns an iterator, see https://github.com/nlohmann/json/issues/3081
             const auto dec_pos = std::find(number_buffer.begin(), number_buffer.end(), decimal_point);
             if (dec_pos != number_buffer.end())
             {

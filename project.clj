@@ -4,7 +4,7 @@
   :dependencies []
   :plugins [[org.jank-lang/lein-jank "0.6"]]
   :middleware [leiningen.jank/middleware]
-  :jank {:include-dirs ["include"]
+  :jank {:include-dirs ["include", "cpp-src"]
          :library-dirs ["lib"]
          :linked-libraries ["TrussC"]}
   :main jank-trussc-test.main

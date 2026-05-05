@@ -24,10 +24,6 @@
 #include "sokol/util/sokol_gl_tc.h"
 #include "sokol/util/sokol_memtrack.h"
 
-// Dear ImGui + sokol_imgui
-#include "imgui/imgui.h"
-#include "sokol/util/sokol_imgui.h"
-
 // Standard libraries
 #include <cstdint>
 #include <cmath>
@@ -42,7 +38,7 @@
 #include "tc/app/tcHeadlessState.h"
 
 // C wrapper exports for stable ABI
-#include "tc/platform/c_exports.h"
+#include "platform_c_exports.h"
 
 // Platform-specific headers for memory usage
 #if defined(__APPLE__)
@@ -78,6 +74,12 @@
 
 // TrussC platform-specific features
 #include "tcPlatform.h"
+
+// TrussC graphics backend detection (runtime query of sokol_gfx backend)
+#include "tc/graphics/tcBackend.h"
+
+// TrussC build info (populated by trussc_app() at CMake configure time)
+#include "tcBuildInfo.h"
 
 // TrussC event system
 #include "tc/events/tcCoreEvents.h"
@@ -169,8 +171,6 @@ namespace internal {
     inline void setupScreenFovWithSize(float fovDeg, float viewW, float viewH, float nearDist = 0.0f, float farDist = 0.0f);
     inline void setupScreenFov(float fovDeg, float nearDist = 0.0f, float farDist = 0.0f);
 
-    // ImGui integration
-    inline bool imguiEnabled = false;
 
     // Blend mode pipelines
     inline sgl_pipeline blendPipelines[6] = {};
@@ -289,6 +289,11 @@ namespace internal {
     // Keyboard state
     inline std::unordered_set<int> keysPressed;
 
+    // Delta time (actual elapsed time since last update call)
+    inline double updateDeltaTime = 0.0;
+    inline std::chrono::high_resolution_clock::time_point lastUpdateCallTime;
+    inline bool lastUpdateCallTimeInitialized = false;
+
     // Frame rate measurement (10-frame moving average)
     inline double frameTimeBuffer[10] = {};
     inline int frameTimeIndex = 0;
@@ -304,8 +309,6 @@ namespace internal {
     // Pass state (for suspending swapchain pass for FBO)
     inline bool inSwapchainPass = false;
 
-    // ImGui deferred render flag (set by imguiEnd, consumed by present)
-    inline bool imguiRenderPending = false;
     // Saved clear color for resume after FBO suspend (set by clear())
     inline sg_color swapchainClearValue = { 0.0f, 0.0f, 0.0f, 1.0f };
 
@@ -319,6 +322,12 @@ namespace internal {
 
     // Current active FBO pointer (used from clearColor)
     inline void* currentFbo = nullptr;
+
+    // Color pixel format of the current FBO pass (for PBR pipeline format matching)
+    inline sg_pixel_format currentFboColorFormat = SG_PIXELFORMAT_RGBA8;
+
+    // MSAAサンプルカウント（FBOパス中のPBRパイプライン用）
+    inline int currentFboSampleCount = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,90 +403,24 @@ inline void clear(const Color& c) {
 // Forward declaration (implemented in tcShader.h after Shader class)
 void flushDeferredShaderDraws();
 
+// パス管理関数（non-inline: Hot Reload時にHost/Guest間で同じグローバル状態を参照するため）
+// 実装は tc/app/tcGlobal.cpp
+
 // Ensure swapchain pass is active (starts if needed)
 // Safe to call multiple times — only starts once.
-// Used by FullscreenShader/LutShader which call sg_draw() directly.
-inline void ensureSwapchainPass() {
-    if (!internal::inSwapchainPass && !internal::inFboPass) {
-        sg_pass pass = {};
-        pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-        pass.action.colors[0].clear_value = internal::swapchainClearValue;
-        pass.action.depth.load_action = SG_LOADACTION_CLEAR;
-        pass.action.depth.clear_value = 1.0f;
-        pass.swapchain = sglue_swapchain();
-        sg_begin_pass(&pass);
-        internal::inSwapchainPass = true;
-    }
-}
+void ensureSwapchainPass();
 
 // End pass and commit (call at end of draw)
-inline void present() {
-    // Skip in headless mode (no graphics context)
-    if (headless::isActive()) return;
-
-    // Start swapchain pass if not yet started
-    ensureSwapchainPass();
-
-    // Flush sokol_gl layers and deferred shader draws
-    flushDeferredShaderDraws();
-
-    // Render ImGui on top of all sokol_gl content (deferred from imguiEnd)
-    if (internal::imguiRenderPending) {
-        simgui_render();
-        internal::imguiRenderPending = false;
-    }
-
-    // Check for vertex buffer overflow before sg_commit resets errors
-    sgl_error_t err = sgl_error();
-    if (err.vertices_full || err.commands_full) {
-        // Schedule resize for next frame (4x to minimize repeated resizes)
-        int newVerts = internal::sglMaxVertices * 4;
-        int newCmds = internal::sglMaxCommands * 4;
-        if (newVerts > internal::sglPendingResize) {
-            internal::sglPendingResize = newVerts;
-            logNotice("sokol_gl") << "Vertex buffer overflow detected ("
-                << internal::sglMaxVertices << " vertices, "
-                << internal::sglMaxCommands << " commands). "
-                << "Will resize to " << newVerts << " next frame.";
-        }
-    }
-
-    sg_end_pass();
-    internal::inSwapchainPass = false;
-    sg_commit();
-}
+void present();
 
 // Get swapchain pass state (for FBO)
-inline bool isInSwapchainPass() {
-    return internal::inSwapchainPass;
-}
+bool isInSwapchainPass();
 
 // Suspend swapchain pass (for FBO begin/end during draw)
-// The pass is simply ended. All sgl commands (pre- and post-FBO) remain in the
-// command buffer and will be drawn together by present() after resume.
-inline void suspendSwapchainPass() {
-    if (internal::inSwapchainPass) {
-        sg_end_pass();
-        internal::inSwapchainPass = false;
-    }
-}
+void suspendSwapchainPass();
 
 // Resume swapchain pass (for FBO)
-// Start a fresh pass with CLEAR action. present() → sgl_draw_layer() will
-// redraw ALL sgl commands (including pre-suspend ones), so no content is lost.
-// This avoids LOADACTION_LOAD on Metal swapchain drawables which can flicker.
-inline void resumeSwapchainPass() {
-    if (!internal::inSwapchainPass) {
-        sg_pass pass = {};
-        pass.action.colors[0].load_action = SG_LOADACTION_CLEAR;
-        pass.action.colors[0].clear_value = internal::swapchainClearValue;
-        pass.action.depth.load_action = SG_LOADACTION_CLEAR;
-        pass.action.depth.clear_value = 1.0f;
-        pass.swapchain = sglue_swapchain();
-        sg_begin_pass(&pass);
-        internal::inSwapchainPass = true;
-    }
-}
+void resumeSwapchainPass();
 
 // ---------------------------------------------------------------------------
 // Color settings (delegated to RenderContext)
@@ -1589,13 +1532,14 @@ inline uint64_t getFrameCount() {
 }
 
 inline double getDeltaTime() {
-    return sapp_frame_duration();
+    return internal::updateDeltaTime;
 }
 
-// Get frame rate (10-frame moving average)
+// Get frame rate (10-frame moving average, based on update delta time)
 inline double getFrameRate() {
-    // Add current frame time to buffer
-    double dt = sapp_frame_duration();
+    // Add current update delta time to buffer
+    double dt = internal::updateDeltaTime;
+    if (dt <= 0.0) return 0.0;
     internal::frameTimeBuffer[internal::frameTimeIndex] = dt;
     internal::frameTimeIndex = (internal::frameTimeIndex + 1) % 10;
     if (internal::frameTimeIndex == 0) {
@@ -2021,6 +1965,10 @@ namespace internal {
         }
         #endif
 
+        // Install the standard application menu on macOS so Cmd+Q etc. work
+        // out of the box. No-op on other platforms.
+        internal::installAppMenu();
+
         // Bring window to front on startup
         trussc_platform_bringWindowToFront();
 
@@ -2039,8 +1987,7 @@ namespace internal {
     inline bool frameReentryGuard = false;
 
     inline void _frame_cb() {
-        // Guard against reentry (e.g. macOS modal dialogs pump the event loop
-        // which can cause sokol to call frame_cb while ImGui is mid-frame)
+        // Guard against reentry (e.g. macOS modal dialogs pump the event loop)
         if (frameReentryGuard) return;
         frameReentryGuard = true;
 
@@ -2064,11 +2011,25 @@ namespace internal {
         mcp::processHttpQueue();
         #endif
 
+        // Compute update delta time (actual elapsed since last update call)
+        auto computeUpdateDelta = [&]() {
+            if (!lastUpdateCallTimeInitialized) {
+                lastUpdateCallTimeInitialized = true;
+                lastUpdateCallTime = now;
+                updateDeltaTime = sapp_frame_duration(); // first frame: use sokol's estimate
+            } else {
+                auto callNow = std::chrono::high_resolution_clock::now();
+                updateDeltaTime = std::chrono::duration<double>(callNow - lastUpdateCallTime).count();
+                lastUpdateCallTime = callNow;
+            }
+        };
+
         // --- Update Loop processing ---
         if (updateSyncedToDraw) {
             // Synced to Draw: handled with shouldDraw below
         } else if (updateTargetFps == VSYNC) {
             // VSYNC mode (independent): update every frame
+            computeUpdateDelta();
             if (appUpdateFunc) appUpdateFunc();
         } else if (updateTargetFps > 0) {
             // Independent fixed Hz Update
@@ -2078,6 +2039,7 @@ namespace internal {
             lastUpdateTime = now;
 
             while (updateAccumulator >= updateInterval) {
+                computeUpdateDelta();
                 if (appUpdateFunc) appUpdateFunc();
                 updateAccumulator -= updateInterval;
             }
@@ -2116,6 +2078,7 @@ namespace internal {
 
             // If Update is synced to Draw, call Update here
             if (updateSyncedToDraw && appUpdateFunc) {
+                computeUpdateDelta();
                 appUpdateFunc();
             }
 
@@ -2156,10 +2119,8 @@ namespace internal {
     }
 
     inline void _event_cb(const sapp_event* ev) {
-        // Pass event to ImGui
-        if (imguiEnabled) {
-            simgui_handle_event(ev);
-        }
+        // Notify raw event listeners (used by addons like tcxImGui)
+        events().rawEvent.notify(*ev);
 
         // ev->mouse_x/y arrive in framebuffer coordinates
         // pixelPerfectMode = true: use as-is (coords = framebuffer size)
@@ -2549,6 +2510,7 @@ int runApp(const WindowSettings& settings = WindowSettings()) {
 // TrussC lighting (must be included before tcMesh.h)
 #include "tc/3d/tcLightingState.h"
 #include "tc/3d/tcMaterial.h"
+#include "tc/3d/tcIesProfile.h"
 #include "tc/3d/tcLight.h"
 
 // TrussC pixel buffer
@@ -2574,6 +2536,13 @@ inline void bindCursorImage(Cursor cursor, const Image& image,
 
 // TrussC mesh
 #include "tc/graphics/tcMesh.h"
+
+// TrussC image-based lighting environment (must come before the pipeline
+// so PbrPipeline::drawMesh() can call Environment methods by value)
+#include "tc/3d/tcEnvironment.h"
+
+// TrussC PBR mesh pipeline (defines Mesh::drawGpuPbr() out-of-class)
+#include "tc/3d/tcMeshPbrPipeline.h"
 
 // TrussC stroke mesh (thick line drawing)
 #include "tc/graphics/tcStrokeMesh.h"
@@ -2682,9 +2651,6 @@ inline void drawCone(float x, float y, float z, float radius, float height, int 
 // TrussC EasyCam (3D camera)
 #include "tc/3d/tcEasyCam.h"
 
-// TrussC ImGui integration
-#include "tc/gui/tcImGui.h"
-
 // TrussC network
 #include "tc/network/tcUdpSocket.h"
 #include "tc/network/tcTcpClient.h"
@@ -2710,6 +2676,12 @@ inline void drawCone(float x, float y, float z, float radius, float height, int 
 
 // TrussC headless mode (no window)
 #include "tc/app/tcHeadlessApp.h"
+
+// Hot reload support (must be after tcBaseApp.h — needs App class definition)
+#include "tc/app/tcHotReload.h"
+#ifdef TC_HOT_RELOAD_BUILD
+#include "tc/app/tcHotReloadHost.h"
+#endif
 
 // =============================================================================
 // Standard library includes (convenience)
