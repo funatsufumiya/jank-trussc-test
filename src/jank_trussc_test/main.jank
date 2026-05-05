@@ -2,10 +2,11 @@
 
 (cpp/raw "
 
+#ifdef _WIN32
 #include \"safe_snprintf.h\" // WORKAROUND
 #define snprintf _safe_snprintf
-
 #include \"safe_snprintf.cpp\" // WORKAROUND
+#endif // _WIN32
 
 #include <cstdio>
 #include <iostream>
