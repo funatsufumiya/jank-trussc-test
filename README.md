@@ -15,3 +15,5 @@ $ lein run
 ## Dev
 
 [TrussC-dll](https://github.com/funatsufumiya/TrussC-dll) is used instead of TrussC original code. Headers are modified for them, mainly for C dylib integration.
+
+Currently using TrussC v0.5.0.1 from [TrussC-dll releases v0.5.0.1-260505-002-dll-export](https://github.com/funatsufumiya/TrussC-dll/releases/tag/v0.5.0.1-260505-002-dll-export)
